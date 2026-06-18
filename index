@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
 <meta name="googlebot" content="noindex, nofollow">
-<title>HP Pharmacist Scheduler v1.0</title>
+<title>HP Pharmacist Scheduler </title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Thai:wght@300;400;600;700&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+Thai:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 /* ═══════════════════════════════════════════════════════
@@ -1580,52 +1580,67 @@ let _fileHandle=null;          // [GAS] ใช้เป็น flag "เชื่
 let _driveRev=0, _driveReady=false, _dbSyncTimer=null;
 
 // true เฉพาะตอนรันใต้ HtmlService iframe ของ GAS — ถ้าเปิดไฟล์ local/Node harness จะ false
-const _GAS = (typeof google!=='undefined' && google.script && google.script.run);
+// 🌟 เปลี่ยน URL ตรงนี้ให้เป็น Web App URL ที่ได้มาจาก Google Apps Script หลังบ้านตัวใหม่ของคุณ
+const BACKEND_URL = "https://script.google.com/a/macros/kku.ac.th/s/AKfycbztdOLLLG1GdHe0lWv7fReBIkMXUsKimV5ZBMKxaPtgnRIh5gr74zECPrllLSgcwglJ/exec";
+let _driveRev = 0; // ตัวแปรคอยนับเวอร์ชันฐานข้อมูลเพื่อป้องกันการเซฟทับกัน
 
-function gasRun(fn, args){
-  args = args || [];
-  return new Promise((resolve, reject)=>{
-    google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn].apply(google.script.run, args);
-  });
-}
-
-// boot: โหลด DB จาก Drive (ถูกเรียกผ่าน dbRestoreHandle() ใน boot เดิม)
+// ฟังก์ชันดึงข้อมูลจาก Google Drive ผ่าน API ตัวใหม่
 async function dbBoot(){
-  if(!_GAS){ updateDbUI(false); return; }   // local/test → คงพฤติกรรม localStorage-only เดิม
-  try{
-    const r = await gasRun('loadDB');
+  try {
+    updateDbUI(true, DB_NAME, true); // แสดงสถานะว่ากำลังดึงข้อมูล
+    const response = await fetch(BACKEND_URL);
+    const r = await response.json();
     if(r && r.ok){
       if(r.json){
         const d = migrateState(JSON.parse(r.json));
-        if(d){ _applyState(d); autoSave(); }
+        if(d){
+          _applyState(d);
+          autoSave();
+        }
       }
-      _driveRev = r.rev||0;
+      _driveRev = r.rev || 0;
+      updateDbUI(true, DB_NAME, false); // เปลี่ยนสถานะเป็น เชื่อมต่อสำเร็จ
+      renderAll(); // สั่งวาดตารางและข้อมูลใหม่ทั้งหมดบนหน้าเว็บ
     }
-    _driveReady=true; _fileHandle=true;
-    updateDbUI(true, DB_NAME);
-  }catch(e){
-    _driveReady=false; updateDbUI(false);
-    showToast('โหลดจาก Drive ล้มเหลว: '+(e.message||e),'err');
+  } catch(e) {
+    updateDbUI(false);
+    showToast('โหลดจาก Drive ล้มเหลว: ' + (e.message || e), 'err');
   }
 }
-async function dbRestoreHandle(){ return dbBoot(); }   // alias — ให้ boot เดิมเรียกได้
 
+async function dbRestoreHandle(){
+  return dbBoot();
+}
+
+// ฟังก์ชันบันทึกข้อมูลและ Sync กลับไปที่ Google Drive ผ่าน API ตัวใหม่
 async function dbSyncNow(){
-  if(!_GAS || !_driveReady) return;
+  if(!_driveReady) return;
   try{
-    updateDbUI(true, DB_NAME, true);
-    const r = await gasRun('saveDB', [{ json: JSON.stringify(S), baseRev: _driveRev }]);
+    updateDbUI(true, DB_NAME, true); // แสดงสถานะว่ากำลังซิงค์
+    const payload = {
+      json: JSON.stringify(S),
+      baseRev: _driveRev
+    };
+    
+    const response = await fetch(BACKEND_URL, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    const r = await response.json();
+    
     if(r && r.ok){
       _driveRev = r.rev;
       S.settings._lastBackupTs = Date.now();
       updateDbUI(true, DB_NAME, false);
-      showToast('Sync → Drive สำเร็จ','ok');
+      showToast('Sync → Drive สำเร็จ', 'ok');
     } else if(r && r.conflict){
       updateDbUI(true, DB_NAME, false);
-      await _handleDriveConflict(r);
-    } else { throw new Error('saveDB not-ok'); }
+      await _handleDriveConflict(r); // กรณีมีคนเซฟตัดหน้า ระบบจะถามเพื่อดึงข้อมูลล่าสุดมาทับ
+    } else {
+      throw new Error('saveDB not-ok');
+    }
   }catch(e){
-    showToast('Sync ล้มเหลว: '+(e.message||e),'err');
+    showToast('Sync ล้มเหลว: ' + (e.message || e), 'err');
     updateDbUI(true, DB_NAME, false);
   }
 }
